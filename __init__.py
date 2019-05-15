@@ -37,7 +37,7 @@ from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 
 from .config import *
-
+from .inference import inference
 
 def error_rate(predictions, labels):
     """Return the error rate based on dense predictions and sparse labels."""
@@ -87,82 +87,6 @@ def main(_):
     eval_data = tf.placeholder(
         data_type(), shape=(None, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS)
     )
-
-    # We will replicate the model structure for the training subgraph, as well
-    # as the evaluation subgraphs, while sharing the trainable parameters.
-    def model(data, train=False):
-        """The Model definition."""
-        # 2D convolution, with 'SAME' padding (i.e. the output feature map has
-        # the same size as the input). Note that {strides} is a 4D array whose
-        # shape matches the data layout: [image index, y, x, depth].
-        conv = tf.nn.conv2d(data, conv1_weights, strides=[1, 1, 1, 1], padding="SAME")
-        # Bias and rectified linear non-linearity.
-        relu = tf.nn.relu(tf.nn.bias_add(conv, conv1_biases))
-        # Max pooling. The kernel size spec {ksize} also follows the layout of
-        # the data. Here we have a pooling window of 2, and a stride of 2.
-        pool = tf.nn.max_pool(
-            relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding="SAME"
-        )
-        conv = tf.nn.conv2d(pool, conv2_weights, strides=[1, 1, 1, 1], padding="SAME")
-        relu = tf.nn.relu(tf.nn.bias_add(conv, conv2_biases))
-        pool = tf.nn.max_pool(
-            relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding="SAME"
-        )
-        # Reshape the feature map cuboid into a 2D matrix to feed it to the
-        # fully connected layers.
-        pool_shape = pool.get_shape().as_list()
-        reshape = tf.reshape(
-            pool, [tf.shape(pool)[0], pool_shape[1] * pool_shape[2] * pool_shape[3]]
-        )
-        # Fully connected layer. Note that the '+' operation automatically
-        # broadcasts the biases.
-        hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases)
-        # Add a 50% dropout during training only. Dropout also scales
-        # activations such that no rescaling is needed at evaluation time.
-        if train:
-            hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
-        return tf.matmul(hidden, fc2_weights) + fc2_biases
-
-    # Training computation: logits + cross-entropy loss.
-    logits = model(train_data_node, True)
-    loss = tf.reduce_mean(
-        tf.nn.sparse_softmax_cross_entropy_with_logits(
-            labels=train_labels_node, logits=logits
-        )
-    )
-    predict_op = tf.argmax(logits, 1, name="predict_op")
-
-    # L2 regularization for the fully connected parameters.
-    regularizers = (
-        tf.nn.l2_loss(fc1_weights)
-        + tf.nn.l2_loss(fc1_biases)
-        + tf.nn.l2_loss(fc2_weights)
-        + tf.nn.l2_loss(fc2_biases)
-    )
-    # Add the regularization term to the loss.
-    loss += 5e-4 * regularizers
-
-    # Optimizer: set up a variable that's incremented once per batch and
-    # controls the learning rate decay.
-    batch = tf.Variable(0, dtype=data_type())
-    # Decay once per epoch, using an exponential schedule starting at 0.01.
-    learning_rate = tf.train.exponential_decay(
-        0.01,  # Base learning rate.
-        batch * BATCH_SIZE,  # Current index into the dataset.
-        train_size,  # Decay step.
-        0.95,  # Decay rate.
-        staircase=True,
-    )
-    # Use simple momentum for the optimization.
-    optimizer = tf.train.MomentumOptimizer(learning_rate, 0.9).minimize(
-        loss, global_step=batch
-    )
-
-    # Predictions for the current training minibatch.
-    train_prediction = tf.nn.softmax(logits)
-
-    # Predictions for the test and validation, which we'll compute less often.
-    eval_prediction = tf.nn.softmax(model(eval_data))
 
     # Small utility function to evaluate a dataset by feeding batches of data to
     # {eval_data} and pulling the results from {eval_predictions}.
