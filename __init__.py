@@ -1,4 +1,4 @@
-﻿# Copyright 2015 The TensorFlow Authors. All Rights Reserved.
+# Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,8 +36,12 @@ from six.moves import urllib
 from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
 
-from .config import *
-from .inference import inference
+from config import config
+from inference import inference
+from loss import get_loss
+from input_data import fake_data, maybe_download, extract_data, extract_labels
+from training import train, train_setup
+
 
 def error_rate(predictions, labels):
     """Return the error rate based on dense predictions and sparse labels."""
@@ -47,8 +51,14 @@ def error_rate(predictions, labels):
 
 
 def main(_):
-    global BATCH_SIZE
-    if FLAGS.self_test:
+    BATCH_SIZE = config.BATCH_SIZE
+    VALIDATION_SIZE = config.VALIDATION_SIZE
+    NUM_EPOCHS = config.NUM_EPOCHS
+    EVAL_FREQUENCY = config.EVAL_FREQUENCY
+    EVAL_BATCH_SIZE = config.EVAL_BATCH_SIZE
+    NUM_LABELS = config.NUM_LABELS
+
+    if config.FLAGS.self_test:
         print("Running self-test.")
         train_data, train_labels = fake_data(256)
         validation_data, validation_labels = fake_data(EVAL_BATCH_SIZE)
@@ -73,20 +83,12 @@ def main(_):
         train_data = train_data[VALIDATION_SIZE:, ...]
         train_labels = train_labels[VALIDATION_SIZE:]
         num_epochs = NUM_EPOCHS
-    train_size = train_labels.shape[0]
 
-    # This is where training samples and labels are fed to the graph.
-    # These placeholder nodes will be fed a batch of training data at each
-    # training step using the {feed_dict} argument to the Run() call below.
-    train_data_node = tf.placeholder(
-        data_type(),
-        shape=(None, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS),
-        name="image_input",
-    )
-    train_labels_node = tf.placeholder(tf.int64, shape=(None,))
-    eval_data = tf.placeholder(
-        data_type(), shape=(None, IMAGE_SIZE, IMAGE_SIZE, NUM_CHANNELS)
-    )
+    train_size, train_data_node, train_labels_node, eval_data = train_setup(train_labels)
+    # Training computation: logits + cross-entropy loss.
+    logits, layers = inference(train_data_node, True)
+    loss, predict_op = get_loss(train_labels_node, logits, layers)
+    learning_rate, optimizer, train_prediction, eval_prediction = train(train_size, train_data_node, loss, logits, eval_data)
 
     # Small utility function to evaluate a dataset by feeding batches of data to
     # {eval_data} and pulling the results from {eval_predictions}.
@@ -112,16 +114,16 @@ def main(_):
 
     ### Change original code
     # Add model_dir to save model
-    if not os.path.exists(FLAGS.model_dir):
-        os.makedirs(FLAGS.model_dir)
+    if not os.path.exists(config.FLAGS.model_dir):
+        os.makedirs(config.FLAGS.model_dir)
 
     ### Change original code
     # Create a saver for writing training checkpoints.
     saver = tf.train.Saver()
     # Create a builder for writing saved model for serving.
-    if os.path.isdir(FLAGS.export_dir):
-        shutil.rmtree(FLAGS.export_dir)
-    builder = tf.saved_model.builder.SavedModelBuilder(FLAGS.export_dir)
+    if os.path.isdir(config.FLAGS.export_dir):
+        shutil.rmtree(config.FLAGS.export_dir)
+    builder = tf.saved_model.builder.SavedModelBuilder(config.FLAGS.export_dir)
 
     # Create a local session to run the training.
     start_time = time.time()
@@ -130,7 +132,7 @@ def main(_):
         tf.global_variables_initializer().run()
         ### Change original code
         # Save checkpoint when training
-        ckpt = tf.train.get_checkpoint_state(FLAGS.model_dir)
+        ckpt = tf.train.get_checkpoint_state(config.FLAGS.model_dir)
         if ckpt and ckpt.model_checkpoint_path:
             print("Load from " + ckpt.model_checkpoint_path)
             saver.restore(sess, ckpt.model_checkpoint_path)
@@ -139,7 +141,7 @@ def main(_):
         # Create summary, logs will be saved, which can display in Tensorboard
         tf.summary.scalar("loss", loss)
         merged = tf.summary.merge_all()
-        writer = tf.summary.FileWriter(os.path.join(FLAGS.model_dir, "log"), sess.graph)
+        writer = tf.summary.FileWriter(os.path.join(config.FLAGS.model_dir, "log"), sess.graph)
 
         print("Initialized!")
 
@@ -171,7 +173,7 @@ def main(_):
                 if step % (EVAL_FREQUENCY * 10) == 0:
                     saver.save(
                         sess,
-                        os.path.join(FLAGS.model_dir, "model.ckpt"),
+                        os.path.join(config.FLAGS.model_dir, "model.ckpt"),
                         global_step=step,
                     )
                 print(
@@ -213,7 +215,7 @@ def main(_):
         # Finally print the result!
         test_error = error_rate(eval_in_batches(test_data, sess), test_labels)
         print("Test error: %.1f%%" % test_error)
-        if FLAGS.self_test:
+        if config.FLAGS.self_test:
             print("test_error", test_error)
             assert test_error == 0.0, "expected 0.0 test_error, got %.2f" % (
                 test_error,
@@ -253,7 +255,6 @@ if __name__ == "__main__":
         help="Directory to put the savedmodel files.",
     )
 
-    FLAGS, unparsed = parser.parse_known_args()
-    WORK_DIRECTORY = FLAGS.input_dir
+    config.FLAGS, unparsed = parser.parse_known_args()
+    config.WORK_DIRECTORY = config.FLAGS.input_dir
     tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
-

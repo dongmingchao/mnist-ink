@@ -3,9 +3,10 @@ import tensorflow as tf
 import os
 import gzip
 import numpy
-from .config import *
+from config import config
 
 def data_type():
+    FLAGS = config.FLAGS
     """Return the type of the activations, weights, and placeholder variables."""
     if FLAGS.use_fp16:
         return tf.float16
@@ -14,6 +15,8 @@ def data_type():
 
 
 def maybe_download(filename):
+    WORK_DIRECTORY = config.WORK_DIRECTORY
+    SOURCE_URL = config.SOURCE_URL
     """Download the data from Yann's website, unless it's already here."""
     if not tf.gfile.Exists(WORK_DIRECTORY):
         tf.gfile.MakeDirs(WORK_DIRECTORY)
@@ -27,10 +30,12 @@ def maybe_download(filename):
 
 
 def extract_data(filename, num_images):
+    IMAGE_SIZE = config.IMAGE_SIZE
+    NUM_CHANNELS = config.NUM_CHANNELS
+    PIXEL_DEPTH = config.PIXEL_DEPTH
     """Extract the images into a 4D tensor [image index, y, x, channels].
-
-  Values are rescaled from [0, 255] down to [-0.5, 0.5].
-  """
+    Values are rescaled from [0, 255] down to [-0.5, 0.5].
+    """
     print("Extracting", filename)
     with gzip.open(filename) as bytestream:
         bytestream.read(16)
