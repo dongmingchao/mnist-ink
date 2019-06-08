@@ -1,260 +1,41 @@
-# Copyright 2015 The TensorFlow Authors. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-# ==============================================================================
-
-"""Simple, end-to-end, LeNet-5-like convolutional MNIST model example.
-
-This should achieve a test error of 0.7%. Please keep this model as simple and
-linear as possible, it is meant as a tutorial for simple convolutional models.
-Run with --self_test on the command line to execute a short self-test.
-"""
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
-import argparse
-import gzip
-import numpy as np
-import os
-import shutil
-import sys
-import time
-
-import numpy
-from six.moves import urllib
-from six.moves import xrange  # pylint: disable=redefined-builtin
 import tensorflow as tf
+from tensorflow.examples.tutorials.mnist import input_data
 
-from config import config
+mnist = input_data.read_data_sets("input", one_hot=True)
 from inference import inference
-from loss import get_loss
-from input_data import fake_data, maybe_download, extract_data, extract_labels
-from training import train, train_setup
-
-
-def error_rate(predictions, labels):
-    """Return the error rate based on dense predictions and sparse labels."""
-    return 100.0 - (
-        100.0 * numpy.sum(numpy.argmax(predictions, 1) == labels) / predictions.shape[0]
-    )
-
-
-def main(_):
-    BATCH_SIZE = config.BATCH_SIZE
-    VALIDATION_SIZE = config.VALIDATION_SIZE
-    NUM_EPOCHS = config.NUM_EPOCHS
-    EVAL_FREQUENCY = config.EVAL_FREQUENCY
-    EVAL_BATCH_SIZE = config.EVAL_BATCH_SIZE
-    NUM_LABELS = config.NUM_LABELS
-
-    if config.FLAGS.self_test:
-        print("Running self-test.")
-        train_data, train_labels = fake_data(256)
-        validation_data, validation_labels = fake_data(EVAL_BATCH_SIZE)
-        test_data, test_labels = fake_data(EVAL_BATCH_SIZE)
-        num_epochs = 1
-    else:
-        # Get the data.
-        train_data_filename = maybe_download("train-images-idx3-ubyte.gz")
-        train_labels_filename = maybe_download("train-labels-idx1-ubyte.gz")
-        test_data_filename = maybe_download("t10k-images-idx3-ubyte.gz")
-        test_labels_filename = maybe_download("t10k-labels-idx1-ubyte.gz")
-
-        # Extract it into numpy arrays.
-        train_data = extract_data(train_data_filename, 60000)
-        train_labels = extract_labels(train_labels_filename, 60000)
-        test_data = extract_data(test_data_filename, 10000)
-        test_labels = extract_labels(test_labels_filename, 10000)
-
-        # Generate a validation set.
-        validation_data = train_data[:VALIDATION_SIZE, ...]
-        validation_labels = train_labels[:VALIDATION_SIZE]
-        train_data = train_data[VALIDATION_SIZE:, ...]
-        train_labels = train_labels[VALIDATION_SIZE:]
-        num_epochs = NUM_EPOCHS
-
-    train_size, train_data_node, train_labels_node, eval_data = train_setup(train_labels)
-    # Training computation: logits + cross-entropy loss.
-    logits, layers = inference(train_data_node, True)
-    loss, predict_op = get_loss(train_labels_node, logits, layers)
-    learning_rate, optimizer, train_prediction, eval_prediction = train(train_size, train_data_node, loss, logits, eval_data)
-
-    # Small utility function to evaluate a dataset by feeding batches of data to
-    # {eval_data} and pulling the results from {eval_predictions}.
-    # Saves memory and enables this to run on smaller GPUs.
-    def eval_in_batches(data, sess):
-        """Get all predictions for a dataset by running it in small batches."""
-        size = data.shape[0]
-        if size < EVAL_BATCH_SIZE:
-            raise ValueError("batch size for evals larger than dataset: %d" % size)
-        predictions = numpy.ndarray(shape=(size, NUM_LABELS), dtype=numpy.float32)
-        for begin in xrange(0, size, EVAL_BATCH_SIZE):
-            end = begin + EVAL_BATCH_SIZE
-            if end <= size:
-                predictions[begin:end, :] = sess.run(
-                    eval_prediction, feed_dict={eval_data: data[begin:end, ...]}
-                )
-            else:
-                batch_predictions = sess.run(
-                    eval_prediction, feed_dict={eval_data: data[-EVAL_BATCH_SIZE:, ...]}
-                )
-                predictions[begin:, :] = batch_predictions[begin - size :, :]
-        return predictions
-
-    ### Change original code
-    # Add model_dir to save model
-    if not os.path.exists(config.FLAGS.model_dir):
-        os.makedirs(config.FLAGS.model_dir)
-
-    ### Change original code
-    # Create a saver for writing training checkpoints.
-    saver = tf.train.Saver()
-    # Create a builder for writing saved model for serving.
-    if os.path.isdir(config.FLAGS.export_dir):
-        shutil.rmtree(config.FLAGS.export_dir)
-    builder = tf.saved_model.builder.SavedModelBuilder(config.FLAGS.export_dir)
-
-    # Create a local session to run the training.
-    start_time = time.time()
-    with tf.Session(config=tf.ConfigProto(log_device_placement=False)) as sess:
-        # Run all the initializers to prepare the trainable parameters.
-        tf.global_variables_initializer().run()
-        ### Change original code
-        # Save checkpoint when training
-        ckpt = tf.train.get_checkpoint_state(config.FLAGS.model_dir)
-        if ckpt and ckpt.model_checkpoint_path:
-            print("Load from " + ckpt.model_checkpoint_path)
-            saver.restore(sess, ckpt.model_checkpoint_path)
-
-        ### Change original code
-        # Create summary, logs will be saved, which can display in Tensorboard
-        tf.summary.scalar("loss", loss)
-        merged = tf.summary.merge_all()
-        writer = tf.summary.FileWriter(os.path.join(config.FLAGS.model_dir, "log"), sess.graph)
-
-        print("Initialized!")
-
-        # Loop through training steps.
-        for step in xrange(int(num_epochs * train_size) // BATCH_SIZE):
-            # Compute the offset of the current minibatch in the data.
-            # Note that we could use better randomization across epochs.
-            offset = (step * BATCH_SIZE) % (train_size - BATCH_SIZE)
-            batch_data = train_data[offset : (offset + BATCH_SIZE), ...]
-            batch_labels = train_labels[offset : (offset + BATCH_SIZE)]
-            # This dictionary maps the batch data (as a numpy array) to the
-            # node in the graph it should be fed to.
-            feed_dict = {train_data_node: batch_data, train_labels_node: batch_labels}
-            # Run the optimizer to update weights.
-            sess.run(optimizer, feed_dict=feed_dict)
-            # print some extra information once reach the evaluation frequency
-            if step % EVAL_FREQUENCY == 0:
-                # fetch some extra nodes' data
-                ### Change original code
-                # Add summary
-                summary, l, lr, predictions = sess.run(
-                    [merged, loss, learning_rate, train_prediction], feed_dict=feed_dict
-                )
-                writer.add_summary(summary, step)
-                elapsed_time = time.time() - start_time
-                start_time = time.time()
-                ### Change original code
-                # save model
-                if step % (EVAL_FREQUENCY * 10) == 0:
-                    saver.save(
-                        sess,
-                        os.path.join(config.FLAGS.model_dir, "model.ckpt"),
-                        global_step=step,
-                    )
-                print(
-                    "Step %d (epoch %.2f), %.1f ms"
-                    % (
-                        step,
-                        float(step) * BATCH_SIZE / train_size,
-                        1000 * elapsed_time / EVAL_FREQUENCY,
-                    )
-                )
-                print("Minibatch loss: %.3f, learning rate: %.6f" % (l, lr))
-                print("Minibatch error: %.1f%%" % error_rate(predictions, batch_labels))
-                print(
-                    "Validation error: %.1f%%"
-                    % error_rate(
-                        eval_in_batches(validation_data, sess), validation_labels
-                    )
-                )
-                sys.stdout.flush()
-
-        ### Change original code
-        # Save model
-        inputs = {tf.saved_model.signature_constants.PREDICT_INPUTS: train_data_node}
-        outputs = {tf.saved_model.signature_constants.PREDICT_OUTPUTS: predict_op}
-        serving_signatures = {
-            "Infer": tf.saved_model.signature_def_utils.predict_signature_def(  # tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY:
-                inputs, outputs
-            )
-        }
-        builder.add_meta_graph_and_variables(
-            sess,
-            [tf.saved_model.tag_constants.SERVING],
-            signature_def_map=serving_signatures,
-            assets_collection=tf.get_collection(tf.GraphKeys.ASSET_FILEPATHS),
-            clear_devices=True,
-        )
-        builder.save()
-
-        # Finally print the result!
-        test_error = error_rate(eval_in_batches(test_data, sess), test_labels)
-        print("Test error: %.1f%%" % test_error)
-        if config.FLAGS.self_test:
-            print("test_error", test_error)
-            assert test_error == 0.0, "expected 0.0 test_error, got %.2f" % (
-                test_error,
-            )
-
+from loss import loss
+from evaluation import accuracy
+from training import train
+from save import save_model
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--use_fp16",
-        default=False,
-        help="Use half floats instead of full floats if True.",
-        action="store_true",
-    )
-    parser.add_argument(
-        "--self_test",
-        default=False,
-        action="store_true",
-        help="True if running a self test.",
-    )
-    parser.add_argument(
-        "--input_dir",
-        type=str,
-        default="input",
-        help="Directory to put the input data.",
-    )
-    parser.add_argument(
-        "--model_dir",
-        type=str,
-        default="output",
-        help="Directory to put the checkpoint files.",
-    )
-    parser.add_argument(
-        "--export_dir",
-        type=str,
-        default="export",
-        help="Directory to put the savedmodel files.",
-    )
+    with tf.name_scope("inputs"):
+        xs = tf.placeholder(tf.float32, [None, 784], name="x_input")
+        ys = tf.placeholder(tf.float32, [None, 10], name="y_input")
+        keep_prob = tf.placeholder(tf.float32, name="dropout")
+    x_image = tf.reshape(xs, [-1, 28, 28, 1])  # 最后一个参数是色深channel
+    prediction, logits = inference(x_image, keep_prob)
+    cross_entropy = loss(prediction, ys)
+    accuracy(logits, mnist)
+    train_step = train(cross_entropy)
 
-    config.FLAGS, unparsed = parser.parse_known_args()
-    config.WORK_DIRECTORY = config.FLAGS.input_dir
-    tf.app.run(main=main, argv=[sys.argv[0]] + unparsed)
+    sess = tf.Session()
+    merged = tf.summary.merge_all()
+    writer = tf.summary.FileWriter("logs/", sess.graph)
+    sess.run(tf.initialize_all_variables())
+
+    for i in range(1000):
+        batch_xs, batch_ys = mnist.train.next_batch(100)
+        sess.run(train_step, feed_dict={xs: batch_xs, ys: batch_ys, keep_prob: 0.5})
+        if i % 50 == 0:
+            loss_value = sess.run(
+                cross_entropy, feed_dict={xs: batch_xs, ys: batch_ys, keep_prob: 0.5}
+            )
+            result = sess.run(
+                merged, feed_dict={xs: batch_xs, ys: batch_ys, keep_prob: 0.5}
+            )
+            writer.add_summary(result, i)
+            print("Loss", loss_value)
+
+    save_model('export', x_image, logits, sess)
+
