@@ -8,13 +8,10 @@ def weight_var(shape):
         return initial
 
 
-def bias_var(shape, name = None):
+def bias_var(shape):
     with tf.name_scope("biases"):
         initial = tf.constant(0.1, shape=shape)
-        if name:
-            initial = tf.Variable(initial, name=name)
-        else:
-            initial = tf.Variable(initial)
+        initial = tf.Variable(initial)
         tf.summary.histogram('biases', initial)
         return initial
 
