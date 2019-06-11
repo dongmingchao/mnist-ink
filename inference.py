@@ -1,72 +1,63 @@
-import tensorflow as tf
-from config import config
-from input_data import data_type
-# We will replicate the model structure for the training subgraph, as well
-# as the evaluation subgraphs, while sharing the trainable parameters.
-def inference(data, train=False):
-    NUM_CHANNELS = config.NUM_CHANNELS
-    SEED = config.SEED
-    IMAGE_SIZE = config.IMAGE_SIZE
-    NUM_LABELS = config.NUM_LABELS
+import tensorflow as  tf
 
-    # The variables below hold all the trainable weights. They are passed an
-    # initial value which will be assigned when we call:
-    # {tf.global_variables_initializer().run()}
-    conv1_weights = tf.Variable(
-        tf.truncated_normal(
-            [5, 5, NUM_CHANNELS, 32],  # 5x5 filter, depth 32.
-            stddev=0.1,
-            seed=SEED,
-            dtype=data_type(),
-        )
-    )
-    conv1_biases = tf.Variable(tf.zeros([32], dtype=data_type()))
-    conv2_weights = tf.Variable(
-        tf.truncated_normal([5, 5, 32, 64], stddev=0.1, seed=SEED, dtype=data_type())
-    )
-    conv2_biases = tf.Variable(tf.constant(0.1, shape=[64], dtype=data_type()))
-    fc1_weights = tf.Variable(  # fully connected, depth 512.
-        tf.truncated_normal(
-            [IMAGE_SIZE // 4 * IMAGE_SIZE // 4 * 64, 512],
-            stddev=0.1,
-            seed=SEED,
-            dtype=data_type(),
-        )
-    )
-    fc1_biases = tf.Variable(tf.constant(0.1, shape=[512], dtype=data_type()))
-    fc2_weights = tf.Variable(
-        tf.truncated_normal([512, NUM_LABELS], stddev=0.1, seed=SEED, dtype=data_type())
-    )
-    fc2_biases = tf.Variable(tf.constant(0.1, shape=[NUM_LABELS], dtype=data_type()))
-    layers = [fc1_weights, fc1_biases, fc2_weights, fc2_biases]
-    """The Model definition."""
-    # 2D convolution, with 'SAME' padding (i.e. the output feature map has
-    # the same size as the input). Note that {strides} is a 4D array whose
-    # shape matches the data layout: [image index, y, x, depth].
-    conv = tf.nn.conv2d(data, conv1_weights, strides=[1, 1, 1, 1], padding="SAME")
-    # Bias and rectified linear non-linearity.
-    relu = tf.nn.relu(tf.nn.bias_add(conv, conv1_biases))
-    # Max pooling. The kernel size spec {ksize} also follows the layout of
-    # the data. Here we have a pooling window of 2, and a stride of 2.
-    pool = tf.nn.max_pool(
-        relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding="SAME"
-    )
-    conv = tf.nn.conv2d(pool, conv2_weights, strides=[1, 1, 1, 1], padding="SAME")
-    relu = tf.nn.relu(tf.nn.bias_add(conv, conv2_biases))
-    pool = tf.nn.max_pool(
-        relu, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding="SAME"
-    )
-    # Reshape the feature map cuboid into a 2D matrix to feed it to the
-    # fully connected layers.
-    pool_shape = pool.get_shape().as_list()
-    reshape = tf.reshape(
-        pool, [tf.shape(pool)[0], pool_shape[1] * pool_shape[2] * pool_shape[3]]
-    )
-    # Fully connected layer. Note that the '+' operation automatically
-    # broadcasts the biases.
-    hidden = tf.nn.relu(tf.matmul(reshape, fc1_weights) + fc1_biases)
-    # Add a 50% dropout during training only. Dropout also scales
-    # activations such that no rescaling is needed at evaluation time.
-    if train:
-        hidden = tf.nn.dropout(hidden, 0.5, seed=SEED)
-    return tf.matmul(hidden, fc2_weights) + fc2_biases, layers
+def weight_var(shape):
+    with tf.name_scope("weights"):
+        initial = tf.truncated_normal(shape, stddev=0.1)
+        initial = tf.Variable(initial)
+        tf.summary.histogram('weights', initial)
+        return initial
+
+
+def bias_var(shape, name = None):
+    with tf.name_scope("biases"):
+        initial = tf.constant(0.1, shape=shape)
+        if name:
+            initial = tf.Variable(initial, name=name)
+        else:
+            initial = tf.Variable(initial)
+        tf.summary.histogram('biases', initial)
+        return initial
+
+
+def conv2d(x, W):
+    # 第3，4个参数是x跨度1 y跨度1
+    # SAME padding 是补0之后卷积，前后层长宽相同
+    return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding="SAME")
+
+
+def max_pool_2x2(x):
+    # 使用池化减轻跨度大问题
+    # ksize 卷积核大小 2x2
+    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding="SAME")
+
+
+def inference(x_image):
+    with tf.name_scope('hidden_layer_1'):
+        W_conv1 = weight_var([5, 5, 1, 32])  # 卷积面patch 5x5 insize=1色深 outsize=32提取32种特征
+        b_conv1 = bias_var([32])  # 过滤层层数
+        hidden_conv1 = conv2d(x_image, W_conv1) + b_conv1  # outsize 28x28x32
+        hidden_conv1 = tf.nn.relu(hidden_conv1)
+        hidden_pool1 = max_pool_2x2(hidden_conv1)  # outsize 14x14x32
+
+    with tf.name_scope('hidden_layer_2'):
+        W_conv2 = weight_var([5, 5, 32, 64])  # 卷积面patch 5x5 insize=1色深 outsize=32提取32种特征
+        b_conv2 = bias_var([64])  # 过滤层层数
+        hidden_conv2 = conv2d(hidden_pool1, W_conv2) + b_conv2  # outsize 14x14x64
+        hidden_conv2 = tf.nn.relu(hidden_conv2)
+        hidden_pool2 = max_pool_2x2(hidden_conv2)  # outsize 7x7x64
+
+    with tf.name_scope('full_connection_1'):
+        # full connect
+        W_fc1 = weight_var([7 * 7 * 64, 1024])
+        b_fc1 = bias_var([1024])
+        hidden_pool2_flat = tf.reshape(hidden_pool2, [-1, 7 * 7 * 64])
+        h_fc1 = tf.nn.relu(tf.matmul(hidden_pool2_flat, W_fc1))
+        h_fc1_drop = tf.nn.dropout(h_fc1, 0.5) # dropout fix 0.5
+
+    with tf.name_scope('full_connection_2'):
+        # full connect
+        W_fc2 = weight_var([1024, 10])
+        b_fc2 = bias_var([10])
+
+    prediction = tf.nn.softmax(tf.matmul(h_fc1_drop, W_fc2) + b_fc2)
+    return prediction, b_fc2
